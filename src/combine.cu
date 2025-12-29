@@ -219,30 +219,6 @@ __global__ void mapKernel(
    *  None (Fills in out array)
    */
 
-    /**
-   * 映射（Map）函数：对输入数组的每个元素应用一个一元函数，并将计算结果存储到输出数组中。
-   * 优化要点：基于输出数组的元素进行并行化处理（每个输出元素对应一个并行任务/线程）。
-   *
-   * 你可能会用到以下辅助函数：
-   * - index_to_position：将多维数组的索引转换为紧凑一维数组中的内存位置（偏移量）
-   * - to_index：将紧凑一维数组中的内存位置转换为多维数组的索引
-   * - broadcast_index：将小尺寸数组的索引转换为大尺寸数组的索引（用于广播机制）
-   *
-   * 参数说明：
-   *  out:        用于存储结果的紧凑一维输出数组，数组大小为out_size
-   *  out_shape:  输出数组的形状（各维度大小组成的数组）
-   *  out_strides:输出数组的步长（各维度对应的内存偏移量组成的数组）
-   *  out_size:   输出数组的总元素个数
-   *  in_storage: 紧凑一维输入数组，数组大小为输入数组的总元素个数
-   *  in_shape:   输入数组的形状（各维度大小组成的数组）
-   *  in_strides: 输入数组的步长（各维度对应的内存偏移量组成的数组）
-   *  shape_size: 输入数组和输出数组的维度数（假设输入与输出的维度数一致）
-   *  fn_id:      要应用到输入数组每个元素上的函数ID（用于区分不同的一元函数逻辑）
-   *
-   * 返回值：
-   *  无返回值（直接填充输出数组out的内容）
-   */
-
     int out_index[MAX_DIMS];
     int in_index[MAX_DIMS];
     
@@ -256,7 +232,28 @@ __global__ void mapKernel(
     // 5. Calculate the position of element in out_array according to out_index and out_strides
     // 6. Apply the unary function to the input element and write the output to the out memory
     
-    assert(false && "Not Implemented");
+    int block_id= blockIdx.x+blockIdx.y*gridDim.x+blockIdx.z*gridDim.x*gridDim.y;//blockIdx.x
+
+    int thread_id=threadIdx.x+threadIdx.y*blockDim.x+threadIdx.z*blockDim.x*blockDim.y;//threadIdx.x
+
+    int tid=block_id*blockDim.x*blockDim.y*blockDim.z+thread_id;//blockIdx.x*blockDim.x+threadIdx.x
+
+    
+
+    if( tid < out_size ){
+      to_index(tid,out_shape,out_index,shape_size);
+      broadcast_index(out_index,out_shape,in_shape,in_index,shape_size,shape_size);
+      
+      int in_pos,out_pos;
+
+      in_pos=index_to_position(in_index,in_strides,shape_size);
+      out_pos=index_to_position(out_index,out_strides,shape_size);
+      
+      out[out_pos]=fn(fn_id,in_storage[in_pos]);
+    }
+
+    // assert(false && "Not Implemented");
+    
     /// END ASSIGN2_1
 }
 
@@ -311,6 +308,27 @@ __global__ void zipKernel(
     int a_index[MAX_DIMS];
     int b_index[MAX_DIMS];
 
+    int block_id= blockIdx.x+blockIdx.y*gridDim.x+blockIdx.z*gridDim.x*gridDim.y;//blockIdx.x
+
+    int thread_id=threadIdx.x+threadIdx.y*blockDim.x+threadIdx.z*blockDim.x*blockDim.y;//threadIdx.x
+
+    int tid=block_id*blockDim.x*blockDim.y*blockDim.z+thread_id;//blockIdx.x*blockDim.x+threadIdx.x
+
+    if(tid < out_size){
+      to_index(tid,out_shape,out_index,out_shape_size);
+      broadcast_index(out_index,out_shape,a_shape,a_index,out_shape_size,a_shape_size);
+      broadcast_index(out_index,out_shape,b_shape,b_index,out_shape_size,b_shape_size);
+      
+      int a_pos,b_pos,out_pos;
+
+      a_pos=index_to_position(a_index,a_strides,a_shape_size);
+      b_pos=index_to_position(b_index,b_strides,b_shape_size);
+      out_pos=index_to_position(out_index,out_strides,out_shape_size);
+
+      out[out_pos]=fn(fn_id,a_storage[a_pos],b_storage[b_pos]);
+
+    }
+
     /// BEGIN ASSIGN2_2
     /// TODO
     // Hints:
@@ -323,7 +341,7 @@ __global__ void zipKernel(
     // 7.Calculate the position of element in b_array according to b_index and b_strides
     // 8. Apply the binary function to the input elements in a_array & b_array and write the output to the out memory
     
-    assert(false && "Not Implemented");
+    // assert(false && "Not Implemented");
     /// END ASSIGN2_2
 }
 
@@ -582,16 +600,19 @@ void tensorZip(
     int* out_strides, 
     int out_size,
     int out_shape_size,
+
     float* a_storage, 
     int* a_shape, 
     int* a_strides,
     int a_size,
     int a_shape_size,
+
     float* b_storage, 
     int* b_shape, 
     int* b_strides,
     int b_size,
     int b_shape_size,
+    
     int fn_id
 ) {
     // Allocate device memory

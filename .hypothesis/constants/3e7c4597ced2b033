@@ -1,0 +1,4 @@
+# file: /root/llmsys_hw1/minitorch/cuda_kernel_ops.py
+# hypothesis_version: 6.148.7
+
+[0.0, 'C_CONTIGUOUS']
