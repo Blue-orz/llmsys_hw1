@@ -223,14 +223,6 @@ __global__ void mapKernel(
     int in_index[MAX_DIMS];
     
     /// BEGIN ASSIGN2_1
-    /// TODO
-    // Hints:
-    // 1. Compute the position in the output array that this thread will write to
-    // 2. Convert the position to the out_index according to out_shape
-    // 3. Broadcast the out_index to the in_index according to in_shape (optional in some cases)
-    // 4. Calculate the position of element in in_array according to in_index and in_strides
-    // 5. Calculate the position of element in out_array according to out_index and out_strides
-    // 6. Apply the unary function to the input element and write the output to the out memory
     
     int block_id= blockIdx.x+blockIdx.y*gridDim.x+blockIdx.z*gridDim.x*gridDim.y;//blockIdx.x
 
@@ -251,8 +243,6 @@ __global__ void mapKernel(
       
       out[out_pos]=fn(fn_id,in_storage[in_pos]);
     }
-
-    // assert(false && "Not Implemented");
     
     /// END ASSIGN2_1
 }
@@ -304,6 +294,8 @@ __global__ void zipKernel(
    *  None (Fills in out array)
    */
 
+    /// BEGIN ASSIGN2_2
+
     int out_index[MAX_DIMS];
     int a_index[MAX_DIMS];
     int b_index[MAX_DIMS];
@@ -329,19 +321,6 @@ __global__ void zipKernel(
 
     }
 
-    /// BEGIN ASSIGN2_2
-    /// TODO
-    // Hints:
-    // 1. Compute the position in the output array that this thread will write to
-    // 2. Convert the position to the out_index according to out_shape
-    // 3. Calculate the position of element in out_array according to out_index and out_strides
-    // 4. Broadcast the out_index to the a_index according to a_shape
-    // 5. Calculate the position of element in a_array according to a_index and a_strides
-    // 6. Broadcast the out_index to the b_index according to b_shape
-    // 7.Calculate the position of element in b_array according to b_index and b_strides
-    // 8. Apply the binary function to the input elements in a_array & b_array and write the output to the out memory
-    
-    // assert(false && "Not Implemented");
     /// END ASSIGN2_2
 }
 
@@ -359,46 +338,67 @@ __global__ void reduceKernel(
     int shape_size,
     int fn_id
 ) {
-  /**
-   * Reduce function. Apply a reduce function to elements of the input array a and store the result in the output array.
-   * Optimization:
-   * Parallelize over the reduction operation. Each kernel performs one reduction.
-   * e.g. a = [[1, 2, 3], [4, 5, 6]], kernel0 computes reduce([1, 2, 3]), kernel1 computes reduce([4, 5, 6]).
-   *
-   * You may find the following functions useful:
-   * - index_to_position: converts an index to a position in a compact array
-   * - to_index: converts a position to an index in a multidimensional array
-   *
-   * Args:
-   *  out: compact 1D array of size out_size to write the output to
-   *  out_shape: shape of the output array
-   *  out_strides: strides of the output array
-   *  out_size: size of the output array
-   *  a_storage: compact 1D array of size in_size
-   *  a_shape: shape of the input array
-   *  a_strides: strides of the input array
-   *  reduce_dim: dimension to reduce on
-   *  reduce_value: initial value for the reduction
-   *  shape_size: number of dimensions in the input & output array, assert dimensions are the same
-   *  fn_id: id of the reduce function, currently only support add, multiply, and max
-   *
-   *
-   * Returns:
-   *  None (Fills in out array)
-   */
+
 
     // __shared__ double cache[BLOCK_DIM]; // Uncomment this line if you want to use shared memory to store partial results
+    extern __shared__ float cache[];
+
     int out_index[MAX_DIMS];
 
+
     /// BEGIN ASSIGN2_3
-    /// TODO
-    // 1. Define the position of the output element that this thread or this block will write to
-    // 2. Convert the out_pos to the out_index according to out_shape
-    // 3. Initialize the reduce_value to the output element
-    // 4. Iterate over the reduce_dim dimension of the input array to compute the reduced value
-    // 5. Write the reduced value to out memory
+
+    int block_id=blockIdx.x+blockIdx.y*gridDim.x+blockIdx.z*gridDim.x*gridDim.y;
+
+    if (block_id >= out_size) return; 
+
+    to_index(block_id,out_shape,out_index,shape_size);
+
+    int len=a_shape[reduce_dim];
+    float tmp_cache=reduce_value;
+
+    if(threadIdx.x<len){
+
+      out_index[reduce_dim]=threadIdx.x;
+
+      int pos=index_to_position(out_index,a_strides,shape_size);
+
+      int reduce_stride=a_strides[reduce_dim];
+
+      for(int i=threadIdx.x;i<len;i+=blockDim.x){
+        tmp_cache=fn(fn_id,tmp_cache,a_storage[pos]);
+        pos+=blockDim.x*reduce_stride;
+      }
+
+    }
+
+    cache[threadIdx.x]=tmp_cache;
     
-    assert(false && "Not Implemented");
+    __syncthreads();
+
+    //s rep 2^len
+    //threadIdx.x+s<blockDim.x
+    // for(int s=1;threadIdx.x+s<blockDim.x;s*=2){
+    //   if(threadIdx.x%(s*2)==0){
+    //     cache[threadIdx.x]=fn(fn_id,cache[threadIdx.x],cache[threadIdx.x+s]);
+    //   }
+    //   __syncthreads();
+    // }
+    //the following method need blockDim.x==2^k
+    for(int s=blockDim.x/2;s>0;s>>=1){
+      if(threadIdx.x<s){
+        cache[threadIdx.x]=fn(fn_id,cache[threadIdx.x],cache[threadIdx.x+s]);
+      }
+
+      __syncthreads();
+    }
+    
+    if(threadIdx.x==0){
+      out_index[reduce_dim]=0;
+      int final_pos=index_to_position(out_index,out_strides,shape_size);
+      
+      out[final_pos]=cache[0];
+    }
     /// END ASSIGN2_3
 }
 
@@ -708,8 +708,9 @@ void tensorReduce(
     
     // Launch kernel
     int threadsPerBlock = 32;
-    int blocksPerGrid = (out_size + threadsPerBlock - 1) / threadsPerBlock;
-    reduceKernel<<<blocksPerGrid, threadsPerBlock>>>(
+    int blocksPerGrid = out_size;
+    size_t shareMemSize = threadsPerBlock * sizeof(float);
+    reduceKernel<<<blocksPerGrid, threadsPerBlock,shareMemSize>>>(
         d_out, d_out_shape, d_out_strides, out_size, 
         d_a, d_a_shape, d_a_strides, 
         reduce_dim, reduce_value, shape_size, fn_id
